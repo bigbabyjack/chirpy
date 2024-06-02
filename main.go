@@ -5,32 +5,35 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/bigbabyjack/chirpy/database"
 )
 
 type apiConfig struct {
-	countChirpsOnDisk int
-	fileserverHits    int
+	fileserverHits int
 }
 
+const dbPath string = "database.json"
+const port string = "8080"
+const filepathRoot string = "/"
+
 func main() {
-	count, err := getCountChirps()
-	if err != nil {
-		log.Printf("Unable to get chirp count: %s", err.Error())
-	}
 	cfg := &apiConfig{
-		countChirpsOnDisk: count,
-		fileserverHits:    0,
+		fileserverHits: 0,
 	}
-	const port string = "8080"
-	const filepathRoot string = "/"
 
 	mux := http.NewServeMux()
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
+	}
+
+	db, err := database.NewDB(dbPath)
+	if err != nil {
+		log.Fatalf("Error starting database: %s", err)
 	}
 
 	mux.Handle("/app/*", cfg.middlewareMetricsInc(http.StripPrefix("/app/", http.FileServer(http.Dir(".")))))
@@ -72,18 +75,40 @@ func main() {
 		profaneWords := []string{"kerfuffle", "sharbert", "fornax"}
 		cleanedBody := getCleanedBody(profaneWords, params.Body)
 
-		c := chirp{
-			ID:   0,
-			Body: cleanedBody,
-		}
-		err = writeToDisk(c)
+		c, err := db.CreateChirp(cleanedBody)
 		if err != nil {
 			log.Printf("Error saving chirp.")
-			respondWithError(w, 500, "Error saving chirp.")
+			errMsg := fmt.Sprintf("Error saving chirp: %s", err)
+			respondWithError(w, 500, errMsg)
 			return
 		}
 		respondWithJSON(w, 201, c)
 		return
+	})
+
+	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		chirps, err := db.GetChirps()
+		if err != nil {
+			respondWithError(w, 500, "Unable to retrieve chirps.")
+		}
+		respondWithJSON(w, 200, chirps)
+
+	})
+
+	mux.HandleFunc("GET /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		chirpID, err := strconv.Atoi(r.PathValue("chirpID"))
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Invalid chirpID %v", chirpID))
+			return
+		}
+		chirp, err := db.GetChirp(chirpID)
+		if err != nil {
+			respondWithError(w, 404, fmt.Sprintf("Chirp with ID %v not found", chirpID))
+			return
+		}
+		respondWithJSON(w, 200, chirp)
+		return
+
 	})
 
 	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
