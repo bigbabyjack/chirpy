@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/bigbabyjack/chirpy/database"
