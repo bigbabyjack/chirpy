@@ -12,18 +12,34 @@ import (
 
 const DB_PATH string = "database.json"
 
-type Chirp struct {
-	ID   int    `json:"id"`
-	Body string `json:"body"`
-}
-
 type DB struct {
 	path string
 	mux  *sync.Mutex
 }
 
 type DBStructure struct {
+	Data struct {
+		Users  Users  `json:"users"`
+		Chirps Chirps `json:"chirps"`
+	} `json:"data"`
+}
+
+type Chirp struct {
+	ID   int    `json:"id"`
+	Body string `json:"body"`
+}
+
+type Chirps struct {
 	Chirps map[int]Chirp `json:"chirps"`
+}
+
+type User struct {
+	ID    int    `json:"id"`
+	Email string `json:"email"`
+}
+
+type Users struct {
+	Users map[int]User
 }
 
 func NewDB(path string) (*DB, error) {
@@ -58,7 +74,7 @@ func (db *DB) loadDB() (DBStructure, error) {
 		return DBStructure{}, fmt.Errorf("Unable to read DB file: %s", err)
 	}
 	if len(dat) == 0 {
-		return DBStructure{Chirps: make(map[int]Chirp)}, nil
+		return DBStructure{}, nil
 	}
 	dbStructure := DBStructure{}
 	err = json.Unmarshal(dat, &dbStructure)
@@ -84,9 +100,9 @@ func (db *DB) CreateChirp(body string) (Chirp, error) {
 	if err != nil {
 		return Chirp{}, err
 	}
-	id := len(dbStructure.Chirps) + 1
+	id := len(dbStructure.Data.Chirps.Chirps) + 1
 	chirp := Chirp{id, body}
-	dbStructure.Chirps[id] = chirp
+	dbStructure.Data.Chirps.Chirps[id] = chirp
 	err = db.writeDB(dbStructure)
 	if err != nil {
 		return Chirp{}, err
@@ -100,7 +116,7 @@ func (db *DB) GetChirps() ([]Chirp, error) {
 		return []Chirp{}, err
 	}
 	chirps := []Chirp{}
-	for _, v := range dbStructure.Chirps {
+	for _, v := range dbStructure.Data.Chirps.Chirps {
 		chirps = append(chirps, v)
 	}
 	sort.Slice(chirps, func(i, j int) bool { return chirps[i].ID < chirps[j].ID })
@@ -124,4 +140,13 @@ func (db *DB) GetChirp(chirpID int) (Chirp, error) {
 	}
 
 	return chirp, nil
+}
+
+func (db *DB) CreateUser(email string) (User, error) {
+	return User{}, nil
+}
+
+func (db *DB) GetUsers() ([]User, error) {
+
+	return make([]User, 0), nil
 }
