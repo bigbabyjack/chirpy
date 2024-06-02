@@ -14,9 +14,8 @@ type Chirp struct {
 }
 
 type DB struct {
-	path  string
-	mux   *sync.Mutex
-	count int
+	path string
+	mux  *sync.Mutex
 }
 
 type DBStructure struct {
@@ -25,7 +24,12 @@ type DBStructure struct {
 
 func NewDB(path string) (*DB, error) {
 	mux := sync.Mutex{}
-	return &DB{path, &mux, 0}, nil
+	db := &DB{path, &mux}
+	err := db.ensureDB()
+	if err != nil {
+		return &DB{}, err
+	}
+	return db, nil
 
 }
 
@@ -33,10 +37,10 @@ func (db *DB) ensureDB() error {
 	if _, err := os.Stat(db.path); err != nil {
 		if os.IsNotExist(err) {
 			file, err := os.OpenFile(db.path, os.O_CREATE|os.O_WRONLY, 0666)
+			defer file.Close()
 			if err != nil {
 				return err
 			}
-			file.Close()
 		} else {
 			return err
 		}
@@ -67,12 +71,17 @@ func (db *DB) writeDB(dbStructure DBStructure) error {
 }
 
 func (db *DB) CreateChirp(body string) (Chirp, error) {
-	chirp := Chirp{db.count + 1, body}
-	chirps, err := db.GetChirps()
+	dbStructure, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
 	}
-	chirps = append(chirps, chirp)
+	id := len(dbStructure.Chirps) + 1
+	chirp := Chirp{id, body}
+	dbStructure.Chirps[id] = chirp
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return Chirp{}, err
+	}
 	return chirp, nil
 }
 
