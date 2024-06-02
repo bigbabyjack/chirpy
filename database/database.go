@@ -74,7 +74,11 @@ func (db *DB) loadDB() (DBStructure, error) {
 		return DBStructure{}, fmt.Errorf("Unable to read DB file: %s", err)
 	}
 	if len(dat) == 0 {
-		return DBStructure{}, nil
+		dbStructure := DBStructure{}
+		dbStructure.Data.Users.Users = make(map[int]User)
+		dbStructure.Data.Chirps.Chirps = make(map[int]Chirp)
+
+		return dbStructure, nil
 	}
 	dbStructure := DBStructure{}
 	err = json.Unmarshal(dat, &dbStructure)
@@ -133,7 +137,6 @@ func (db *DB) GetChirp(chirpID int) (Chirp, error) {
 	if chirpID > len(chirps) {
 		return Chirp{}, fmt.Errorf("Chirp with chirpID %d does not exist.", chirpID)
 	}
-
 	chirp := chirps[chirpID-1]
 	if chirp.ID != chirpID {
 		return Chirp{}, errors.New("Internal error in retrieving chirp.")
@@ -143,7 +146,24 @@ func (db *DB) GetChirp(chirpID int) (Chirp, error) {
 }
 
 func (db *DB) CreateUser(email string) (User, error) {
-	return User{}, nil
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+	users := dbStructure.Data.Users.Users
+	id := len(users) + 1
+	user := User{
+		ID:    id,
+		Email: email,
+	}
+	dbStructure.Data.Users.Users[id] = user
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		log.Println(err.Error())
+		return User{}, err
+	}
+
+	return user, nil
 }
 
 func (db *DB) GetUsers() ([]User, error) {

@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 
@@ -21,6 +23,17 @@ const port string = "8080"
 const filepathRoot string = "/"
 
 func main() {
+
+	dbg := flag.Bool("debug", false, "Enable debug mode")
+	flag.Parse()
+	if *dbg {
+		err := os.Remove(dbPath)
+		if err != nil {
+			log.Fatalf("Unable to delete database in debug mode: %s", err.Error())
+			return
+		}
+	}
+
 	db, err := database.NewDB(dbPath)
 	if err != nil {
 		log.Fatalf("Error starting database: %s", err)
@@ -66,7 +79,13 @@ func main() {
 		err := decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 500, "Error decoding parameters.")
+			return
 		}
+		user, err := cfg.db.CreateUser(params.Email)
+		if err != nil {
+			respondWithError(w, 500, "Error creating user.")
+		}
+		respondWithJSON(w, 201, user)
 	})
 
 	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
