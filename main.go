@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/bigbabyjack/chirpy/database"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type apiConfig struct {
@@ -72,8 +73,10 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
-			Email string `json:"email"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
+
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
 		err := decoder.Decode(&params)
@@ -81,16 +84,64 @@ func main() {
 			respondWithError(w, 500, "Error decoding parameters.")
 			return
 		}
-		user, err := cfg.db.CreateUser(params.Email)
+		err = verifyPasswordCreation(params.Password)
+		if err != nil {
+			respondWithError(w, 500, "Password must be between 5 and 12 characters.")
+		}
+		user, err := cfg.db.CreateUser(params.Email, params.Password)
 		if err != nil {
 			respondWithError(w, 500, "Error creating user.")
 		}
-		respondWithJSON(w, 201, user)
+		respondWithJSON(w, 201, UserResponse{
+			user.ID,
+			user.Email,
+		})
+	})
+
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		type parameters struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			respondWithError(w, 500, "Unable to parse email and password")
+		}
+		// TODO:
+		// get user by email
+		user, err := db.GetUser(params.Email)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, err.Error())
+		}
+		// compare password hash
+		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(params.Password))
+		if err != nil {
+			respondWithError(w, 401, "Invalid username and password combination.")
+		}
+		respondWithJSON(w, 200, UserResponse{
+			user.ID,
+			user.Email,
+		})
 	})
 
 	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
 	log.Fatal(srv.ListenAndServe())
 
+}
+
+type UserResponse struct {
+	ID    int    `json:"id"`
+	Email string `json:"email"`
+}
+
+func verifyPasswordCreation(p string) error {
+	if len(p) > 12 || len(p) < 5 {
+		return fmt.Errorf("Password must be between 5 and 12 characters")
+	}
+
+	return nil
 }
 
 func getCleanedBody(profaneWords []string, body string) string {
