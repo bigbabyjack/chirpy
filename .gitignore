@@ -2,3 +2,4 @@ out
 database.json
 tmp/
 chirpy
+.env

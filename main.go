@@ -8,15 +8,20 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bigbabyjack/chirpy/database"
+	"github.com/golang-jwt/jwt"
+	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type apiConfig struct {
 	fileserverHits int
 	db             *database.DB
+	jwtSecret      string
 }
 
 const dbPath string = "database.json"
@@ -24,7 +29,14 @@ const port string = "8080"
 const filepathRoot string = "/"
 
 func main() {
-
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalf("Error loading .env file")
+	}
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatalf("JWT_SECRET not found in .env file")
+	}
 	dbg := flag.Bool("debug", false, "Enable debug mode")
 	flag.Parse()
 	if *dbg {
@@ -100,8 +112,9 @@ func main() {
 
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email            string `json:"email"`
+			Password         string `json:"password"`
+			ExpiresInSeconds *int64 `json:"expires_in_seconds"`
 		}
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
@@ -109,8 +122,6 @@ func main() {
 		if err != nil {
 			respondWithError(w, 500, "Unable to parse email and password")
 		}
-		// TODO:
-		// get user by email
 		user, err := db.GetUser(params.Email)
 		if err != nil {
 			respondWithError(w, http.StatusBadRequest, err.Error())
@@ -120,15 +131,41 @@ func main() {
 		if err != nil {
 			respondWithError(w, 401, "Invalid username and password combination.")
 		}
-		respondWithJSON(w, 200, UserResponse{
+		var expiresInSeconds int64
+		if params.ExpiresInSeconds != nil {
+			params.ExpiresInSeconds = &expiresInSeconds
+		} else {
+			expiresInSeconds = int64(24 * time.Hour.Seconds())
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
+			Issuer:    "chirpy",
+			IssuedAt:  time.Now().UTC().Unix(),
+			ExpiresAt: time.Now().UTC().Unix() + expiresInSeconds,
+			Subject:   strconv.Itoa(user.ID),
+		})
+		signedToken, err := token.SignedString([]byte(jwtSecret))
+		if err != nil {
+			log.Println(err.Error())
+			respondWithError(w, 500, "Unable to get JWT Token")
+			return
+		}
+		log.Printf("Token: %s", signedToken)
+		respondWithJSON(w, 200, UserResponseWithToken{
 			user.ID,
 			user.Email,
+			signedToken,
 		})
 	})
 
 	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
 	log.Fatal(srv.ListenAndServe())
 
+}
+
+type UserResponseWithToken struct {
+	ID       int    `json:"id"`
+	Email    string `json:"email"`
+	JWTToken string `json:"jwt_token"`
 }
 
 type UserResponse struct {
