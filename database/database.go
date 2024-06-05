@@ -225,8 +225,14 @@ func (db *DB) UpdateRefreshToken(id int, t string) error {
 	if !ok {
 		return err
 	}
-	user.RefreshToken = t
-	user.ExpiresAt = time.Now().UTC().Add(time.Duration(24) * time.Hour * 60).Unix()
+	user = User{
+		ID:           user.ID,
+		Email:        user.Email,
+		Password:     user.Password,
+		RefreshToken: t,
+		ExpiresAt:    time.Now().UTC().Add(time.Duration(24) * time.Hour * 60).Unix(),
+	}
+	dbStructure.Data.Users.Users[id] = user
 	err = db.writeDB(dbStructure)
 	if err != nil {
 		return err
@@ -241,6 +247,8 @@ func (db *DB) VerifyRefreshToken(t string) (User, error) {
 	}
 	users := dbStructure.Data.Users.Users
 	for _, u := range users {
+		now := time.Now().Unix()
+		fmt.Printf("Time now: %d\nExpires at: %d\nExpired:%b", now, u.ExpiresAt, now > u.ExpiresAt)
 		if u.RefreshToken == t && u.ExpiresAt > time.Now().Unix() {
 			return u, nil
 		}
@@ -256,9 +264,10 @@ func (db *DB) RevokeRefreshToken(t string) error {
 		return err
 	}
 	users := dbStructure.Data.Users.Users
-	for _, u := range users {
+	for i, u := range users {
 		if u.RefreshToken == t {
 			u.RefreshToken = ""
+			dbStructure.Data.Users.Users[i] = u
 			err := db.writeDB(dbStructure)
 			if err != nil {
 				return err

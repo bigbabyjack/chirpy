@@ -225,7 +225,7 @@ func main() {
 		}
 		u, err := cfg.db.VerifyRefreshToken(refreshToken)
 		if err != nil {
-			respondWithError(w, 401, "Unathorized user.")
+			respondWithError(w, 401, "Unauthorized user.")
 			return
 		}
 		// TODO: generate new jwt token
