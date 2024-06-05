@@ -57,6 +57,7 @@ func main() {
 	cfg := &apiConfig{
 		fileserverHits: 0,
 		db:             db,
+		jwtSecret:      jwtSecret,
 	}
 
 	mux := http.NewServeMux()
@@ -228,7 +229,7 @@ func main() {
 			respondWithError(w, 401, "Unauthorized user.")
 			return
 		}
-		// TODO: generate new jwt token
+
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 			Issuer:    "chirpy",
 			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
