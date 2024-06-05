@@ -8,8 +8,6 @@ import (
 	"os"
 	"sort"
 	"sync"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 const DB_PATH string = "database.json"
@@ -155,7 +153,6 @@ func (db *DB) CreateUser(email string, password string) (User, error) {
 	}
 	users := dbStructure.Data.Users.Users
 	id := len(users) + 1
-	hashedPwd, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return User{}, err
 	}
@@ -163,7 +160,7 @@ func (db *DB) CreateUser(email string, password string) (User, error) {
 	user := User{
 		ID:       id,
 		Email:    email,
-		Password: string(hashedPwd),
+		Password: password,
 	}
 	for _, u := range users {
 		if u.Email == email {
@@ -193,4 +190,25 @@ func (db *DB) GetUser(email string) (User, error) {
 		}
 	}
 	return User{}, fmt.Errorf("User not found: %s", email)
+}
+
+func (db *DB) UpdateUser(id int, u User) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+	user, ok := dbStructure.Data.Users.Users[id]
+	if !ok {
+		return User{}, err
+	}
+
+	user.Email = u.Email
+	user.Password = u.Password
+	dbStructure.Data.Users.Users[id] = user
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return User{}, err
+	}
+
+	return user, nil
 }

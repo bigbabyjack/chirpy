@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/bigbabyjack/chirpy/database"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -97,10 +97,11 @@ func main() {
 			return
 		}
 		err = verifyPasswordCreation(params.Password)
+		hashedPwd, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
 		if err != nil {
 			respondWithError(w, 500, "Password must be between 5 and 12 characters.")
 		}
-		user, err := cfg.db.CreateUser(params.Email, params.Password)
+		user, err := cfg.db.CreateUser(params.Email, string(hashedPwd))
 		if err != nil {
 			respondWithError(w, 500, "Error creating user.")
 		}
@@ -108,6 +109,52 @@ func main() {
 			user.ID,
 			user.Email,
 		})
+	})
+
+	mux.HandleFunc("PUT /api/users", func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			respondWithError(w, 401, "Cannot find JWT token")
+			return
+		}
+
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+			return []byte(jwtSecret), nil
+		})
+		if err != nil {
+			respondWithError(w, 401, "Cannot parse JWT token")
+			return
+		}
+
+		claims := token.Claims.(*jwt.RegisteredClaims)
+		id := claims.Subject
+
+		params := database.User{}
+		decoder := json.NewDecoder(r.Body)
+		err = decoder.Decode(&params)
+		if err != nil {
+			respondWithError(w, 500, err.Error())
+			return
+		}
+
+		ID, err := strconv.Atoi(id)
+		if err != nil {
+			respondWithError(w, 500, err.Error())
+			return
+		}
+		hashedPwd, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
+		params.Password = string(hashedPwd)
+		if err != nil {
+			respondWithError(w, 500, "Password must be between 5 and 12 characters.")
+		}
+
+		cfg.db.UpdateUser(ID, params)
+		respondWithJSON(w, 200, UserResponse{
+			ID,
+			params.Email,
+		})
+
 	})
 
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
@@ -131,25 +178,28 @@ func main() {
 		if err != nil {
 			respondWithError(w, 401, "Invalid username and password combination.")
 		}
+
 		var expiresInSeconds int64
 		if params.ExpiresInSeconds != nil {
 			params.ExpiresInSeconds = &expiresInSeconds
 		} else {
 			expiresInSeconds = int64(24 * time.Hour.Seconds())
 		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.StandardClaims{
+
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
 			Issuer:    "chirpy",
-			IssuedAt:  time.Now().UTC().Unix(),
-			ExpiresAt: time.Now().UTC().Unix() + expiresInSeconds,
+			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(time.Duration(expiresInSeconds) * time.Second)),
 			Subject:   strconv.Itoa(user.ID),
 		})
+
 		signedToken, err := token.SignedString([]byte(jwtSecret))
 		if err != nil {
 			log.Println(err.Error())
 			respondWithError(w, 500, "Unable to get JWT Token")
 			return
 		}
-		log.Printf("Token: %s", signedToken)
+
 		respondWithJSON(w, 200, UserResponseWithToken{
 			user.ID,
 			user.Email,
@@ -165,7 +215,7 @@ func main() {
 type UserResponseWithToken struct {
 	ID       int    `json:"id"`
 	Email    string `json:"email"`
-	JWTToken string `json:"jwt_token"`
+	JWTToken string `json:"token"`
 }
 
 type UserResponse struct {
