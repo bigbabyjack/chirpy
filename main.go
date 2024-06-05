@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -112,13 +115,11 @@ func main() {
 	})
 
 	mux.HandleFunc("PUT /api/users", func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			respondWithError(w, 401, "Cannot find JWT token")
+		tokenString, err := getBearerTokenFromHeader(r)
+		if err != nil {
+			respondWithError(w, 401, "Cannot parse JWT token")
 			return
 		}
-
-		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
 			return []byte(jwtSecret), nil
 		})
@@ -168,22 +169,25 @@ func main() {
 		err := decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 500, "Unable to parse email and password")
+			return
 		}
 		user, err := db.GetUser(params.Email)
 		if err != nil {
 			respondWithError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		// compare password hash
 		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(params.Password))
 		if err != nil {
 			respondWithError(w, 401, "Invalid username and password combination.")
+			return
 		}
 
 		var expiresInSeconds int64
 		if params.ExpiresInSeconds != nil {
 			params.ExpiresInSeconds = &expiresInSeconds
 		} else {
-			expiresInSeconds = int64(24 * time.Hour.Seconds())
+			expiresInSeconds = int64(1 * time.Hour.Seconds())
 		}
 
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
@@ -199,12 +203,57 @@ func main() {
 			respondWithError(w, 500, "Unable to get JWT Token")
 			return
 		}
-
+		b := make([]byte, 32)
+		_, err = rand.Read(b)
+		if err != nil {
+			respondWithError(w, 500, "Internal Error")
+		}
+		refreshToken := hex.EncodeToString(b)
+		cfg.db.UpdateRefreshToken(user.ID, refreshToken)
 		respondWithJSON(w, 200, UserResponseWithToken{
 			user.ID,
 			user.Email,
 			signedToken,
+			refreshToken,
 		})
+	})
+
+	mux.HandleFunc("POST /api/refresh", func(w http.ResponseWriter, r *http.Request) {
+		refreshToken, err := getBearerTokenFromHeader(r)
+		if err != nil {
+			respondWithError(w, 401, err.Error())
+		}
+		u, err := cfg.db.VerifyRefreshToken(refreshToken)
+		if err != nil {
+			respondWithError(w, 401, "Unathorized user.")
+			return
+		}
+		// TODO: generate new jwt token
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+			Issuer:    "chirpy",
+			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().UTC().Add(time.Duration(time.Hour.Seconds()) * time.Second)),
+			Subject:   strconv.Itoa(u.ID),
+		})
+
+		signedToken, err := token.SignedString([]byte(jwtSecret))
+		respondWithJSON(w, 200, struct {
+			Token string `json:"token"`
+		}{signedToken})
+	})
+
+	mux.HandleFunc("POST /api/revoke", func(w http.ResponseWriter, r *http.Request) {
+		refreshToken, err := getBearerTokenFromHeader(r)
+		if err != nil {
+			respondWithError(w, 401, err.Error())
+			return
+		}
+		err = cfg.db.RevokeRefreshToken(refreshToken)
+		if err != nil {
+			respondWithError(w, 401, "Invalid token")
+			return
+		}
+		respondWithJSON(w, 204, struct{}{})
 	})
 
 	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
@@ -213,9 +262,10 @@ func main() {
 }
 
 type UserResponseWithToken struct {
-	ID       int    `json:"id"`
-	Email    string `json:"email"`
-	JWTToken string `json:"token"`
+	ID           int    `json:"id"`
+	Email        string `json:"email"`
+	JWTToken     string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type UserResponse struct {
@@ -241,4 +291,14 @@ func getCleanedBody(profaneWords []string, body string) string {
 	}
 	cleanedBody := strings.Join(words, " ")
 	return cleanedBody
+}
+
+func getBearerTokenFromHeader(r *http.Request) (string, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return "", errors.New("Unable to parse bearer token")
+	}
+
+	refreshToken := strings.TrimPrefix(authHeader, "Bearer ")
+	return refreshToken, nil
 }

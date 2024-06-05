@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 )
 
 const DB_PATH string = "database.json"
@@ -34,9 +35,11 @@ type Chirps struct {
 }
 
 type User struct {
-	ID       int    `json:"id"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	ID           int    `json:"id"`
+	Email        string `json:"email"`
+	Password     string `json:"password"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at"`
 }
 
 type Users struct {
@@ -211,4 +214,59 @@ func (db *DB) UpdateUser(id int, u User) (User, error) {
 	}
 
 	return user, nil
+}
+
+func (db *DB) UpdateRefreshToken(id int, t string) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+	user, ok := dbStructure.Data.Users.Users[id]
+	if !ok {
+		return err
+	}
+	user.RefreshToken = t
+	user.ExpiresAt = time.Now().UTC().Add(time.Duration(24) * time.Hour * 60).Unix()
+	err = db.writeDB(dbStructure)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *DB) VerifyRefreshToken(t string) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+	users := dbStructure.Data.Users.Users
+	for _, u := range users {
+		if u.RefreshToken == t && u.ExpiresAt > time.Now().Unix() {
+			return u, nil
+		}
+	}
+
+	return User{}, errors.New("Invalid refresh token.")
+
+}
+
+func (db *DB) RevokeRefreshToken(t string) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+	users := dbStructure.Data.Users.Users
+	for _, u := range users {
+		if u.RefreshToken == t {
+			u.RefreshToken = ""
+			err := db.writeDB(dbStructure)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+
+	return errors.New("Invalid refresh token.")
+
 }
