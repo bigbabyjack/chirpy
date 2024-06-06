@@ -25,6 +25,7 @@ type apiConfig struct {
 	fileserverHits int
 	db             *database.DB
 	jwtSecret      string
+	polkaApiKey    string
 }
 
 const dbPath string = "database.json"
@@ -37,6 +38,10 @@ func main() {
 		log.Fatalf("Error loading .env file")
 	}
 	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Fatalf("JWT_SECRET not found in .env file")
+	}
+	polkaAPIKey := os.Getenv("POLKA_API_KEY")
 	if jwtSecret == "" {
 		log.Fatalf("JWT_SECRET not found in .env file")
 	}
@@ -58,6 +63,7 @@ func main() {
 		fileserverHits: 0,
 		db:             db,
 		jwtSecret:      jwtSecret,
+		polkaApiKey:    polkaAPIKey,
 	}
 
 	mux := http.NewServeMux()
@@ -318,6 +324,17 @@ func main() {
 	})
 
 	mux.HandleFunc("POST /api/polka/webhooks", func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			respondWithError(w, 401, "Don't recognize api key")
+			return
+		}
+
+		polkaAPIKey := strings.TrimPrefix(authHeader, "ApiKey ")
+		if cfg.polkaApiKey != polkaAPIKey {
+			respondWithError(w, 401, "Don't recognize api key")
+			return
+		}
 		type polkaHook struct {
 			Event string         `json:"event"`
 			Data  map[string]int `json:"data"`

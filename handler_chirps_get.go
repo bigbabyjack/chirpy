@@ -7,11 +7,28 @@ import (
 )
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	s := r.URL.Query().Get("author_id")
+	if s != "" {
+		authorID, err := strconv.Atoi(s)
+		if err != nil {
+			respondWithError(w, 404, "User not found")
+			return
+		}
+		chirps, err := cfg.db.GetChirpsByAuthor(authorID)
+		if err != nil {
+			respondWithError(w, 500, "Error getting chirps")
+		}
+		respondWithJSON(w, 200, chirps)
+		return
+
+	}
 	chirps, err := cfg.db.GetChirps()
 	if err != nil {
 		respondWithError(w, 500, "Unable to retrieve chirps.")
+		return
 	}
 	respondWithJSON(w, 200, chirps)
+	return
 
 }
 
