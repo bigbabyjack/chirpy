@@ -86,6 +86,52 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", cfg.handlerCreateChirps)
 	mux.HandleFunc("GET /api/chirps", cfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handlerGetChirp)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("Hello from the delete endpoint")
+		tokenString, err := getBearerTokenFromHeader(r)
+		if err != nil {
+			respondWithError(w, 403, "Cannot parse JWT token")
+			return
+		}
+		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+			return []byte(cfg.jwtSecret), nil
+		})
+		if err != nil {
+			respondWithError(w, 403, "Cannot parse JWT token")
+			return
+		}
+
+		claims := token.Claims.(*jwt.RegisteredClaims)
+		authorID, err := strconv.Atoi(claims.Subject)
+		if err != nil {
+			respondWithError(w, 403, "Unauthorized.")
+			return
+		}
+
+		chirpID, err := strconv.Atoi(r.PathValue("chirpID"))
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Invalid chirpID %v", chirpID))
+			return
+		}
+
+		chirp, err := cfg.db.GetChirp(chirpID)
+		if err != nil {
+			respondWithError(w, 404, fmt.Sprintf("Chirp with ID %v not found", chirpID))
+			return
+		}
+		if authorID == chirp.AuthorID {
+			err := cfg.db.DeleteChirp(chirp.ID)
+			if err != nil {
+				respondWithError(w, 500, err.Error())
+				return
+			}
+			fmt.Println("Deleted")
+			respondWithJSON(w, 204, struct{}{})
+			return
+		}
+		respondWithError(w, 403, "Unauthorized.")
+		return
+	})
 
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
@@ -112,6 +158,7 @@ func main() {
 		respondWithJSON(w, 201, UserResponse{
 			user.ID,
 			user.Email,
+			user.IsChirpyRed,
 		})
 	})
 
@@ -122,7 +169,7 @@ func main() {
 			return
 		}
 		token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-			return []byte(jwtSecret), nil
+			return []byte(cfg.jwtSecret), nil
 		})
 		if err != nil {
 			respondWithError(w, 401, "Cannot parse JWT token")
@@ -149,12 +196,18 @@ func main() {
 		params.Password = string(hashedPwd)
 		if err != nil {
 			respondWithError(w, 500, "Password must be between 5 and 12 characters.")
+			return
 		}
 
-		cfg.db.UpdateUser(ID, params)
+		user, err := cfg.db.UpdateUser(ID, params)
+		if err != nil {
+			respondWithError(w, 500, err.Error())
+			return
+		}
 		respondWithJSON(w, 200, UserResponse{
-			ID,
+			user.ID,
 			params.Email,
+			user.IsChirpyRed,
 		})
 
 	})
@@ -198,7 +251,7 @@ func main() {
 			Subject:   strconv.Itoa(user.ID),
 		})
 
-		signedToken, err := token.SignedString([]byte(jwtSecret))
+		signedToken, err := token.SignedString([]byte(cfg.jwtSecret))
 		if err != nil {
 			log.Println(err.Error())
 			respondWithError(w, 500, "Unable to get JWT Token")
@@ -208,14 +261,21 @@ func main() {
 		_, err = rand.Read(b)
 		if err != nil {
 			respondWithError(w, 500, "Internal Error")
+			return
 		}
 		refreshToken := hex.EncodeToString(b)
-		cfg.db.UpdateRefreshToken(user.ID, refreshToken)
+		err = cfg.db.UpdateRefreshToken(user.ID, refreshToken)
+		if err != nil {
+			respondWithError(w, 500, "Internal Error")
+			return
+		}
+
 		respondWithJSON(w, 200, UserResponseWithToken{
 			user.ID,
 			user.Email,
 			signedToken,
 			refreshToken,
+			user.IsChirpyRed,
 		})
 	})
 
@@ -237,7 +297,7 @@ func main() {
 			Subject:   strconv.Itoa(u.ID),
 		})
 
-		signedToken, err := token.SignedString([]byte(jwtSecret))
+		signedToken, err := token.SignedString([]byte(cfg.jwtSecret))
 		respondWithJSON(w, 200, struct {
 			Token string `json:"token"`
 		}{signedToken})
@@ -257,6 +317,43 @@ func main() {
 		respondWithJSON(w, 204, struct{}{})
 	})
 
+	mux.HandleFunc("POST /api/polka/webhooks", func(w http.ResponseWriter, r *http.Request) {
+		type polkaHook struct {
+			Event string         `json:"event"`
+			Data  map[string]int `json:"data"`
+		}
+
+		request := &polkaHook{}
+		decoder := json.NewDecoder(r.Body)
+		err := decoder.Decode(request)
+		if err != nil {
+			respondWithError(w, 404, err.Error())
+			return
+		}
+		if request.Event != "user.upgraded" {
+			respondWithError(w, 204, "")
+			return
+		}
+		userID, ok := request.Data["user_id"]
+		if !ok {
+			respondWithError(w, 404, "")
+			return
+		}
+		user, err := cfg.db.GetUserByID(userID)
+		if err != nil {
+			respondWithError(w, 404, err.Error())
+			return
+		}
+		user.IsChirpyRed = true
+		_, err = cfg.db.UpdateUser(userID, user)
+		if err != nil {
+			respondWithError(w, 500, err.Error())
+			return
+		}
+		respondWithJSON(w, 204, fmt.Sprintf("User %d upgraded.", userID))
+
+	})
+
 	log.Printf("Serving files from %s on port: %s\n", filepathRoot, port)
 	log.Fatal(srv.ListenAndServe())
 
@@ -267,11 +364,13 @@ type UserResponseWithToken struct {
 	Email        string `json:"email"`
 	JWTToken     string `json:"token"`
 	RefreshToken string `json:"refresh_token"`
+	IsChirpyRed  bool   `json:"is_chirpy_red"`
 }
 
 type UserResponse struct {
-	ID    int    `json:"id"`
-	Email string `json:"email"`
+	ID          int    `json:"id"`
+	Email       string `json:"email"`
+	IsChirpyRed bool   `json:"is_chirpy_red"`
 }
 
 func verifyPasswordCreation(p string) error {

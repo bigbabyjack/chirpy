@@ -14,8 +14,9 @@ import (
 const DB_PATH string = "database.json"
 
 type DB struct {
-	path string
-	mux  *sync.Mutex
+	path       string
+	mux        *sync.Mutex
+	chirpCount int
 }
 
 type DBStructure struct {
@@ -41,6 +42,7 @@ type User struct {
 	Password     string `json:"password"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresAt    int64  `json:"expires_at"`
+	IsChirpyRed  bool   `json:"is_chirpy_red"`
 }
 
 type Users struct {
@@ -49,7 +51,7 @@ type Users struct {
 
 func NewDB(path string) (*DB, error) {
 	mux := sync.Mutex{}
-	db := &DB{path, &mux}
+	db := &DB{path, &mux, 0}
 	err := db.ensureDB()
 	if err != nil {
 		log.Println(err)
@@ -109,13 +111,14 @@ func (db *DB) CreateChirp(body string, authorID int) (Chirp, error) {
 	if err != nil {
 		return Chirp{}, err
 	}
-	id := len(dbStructure.Data.Chirps.Chirps) + 1
+	id := db.chirpCount + 1
 	chirp := Chirp{id, body, authorID}
 	dbStructure.Data.Chirps.Chirps[id] = chirp
 	err = db.writeDB(dbStructure)
 	if err != nil {
 		return Chirp{}, err
 	}
+	db.chirpCount++
 	return chirp, nil
 }
 
@@ -150,6 +153,21 @@ func (db *DB) GetChirp(chirpID int) (Chirp, error) {
 	return chirp, nil
 }
 
+func (db *DB) DeleteChirp(chirpID int) error {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return err
+	}
+	chirps := dbStructure.Data.Chirps.Chirps
+	_, ok := chirps[chirpID]
+	if !ok {
+		return fmt.Errorf("Chirp with ID %d doees not exist.", chirpID)
+	}
+	delete(chirps, chirpID)
+
+	return nil
+}
+
 func (db *DB) CreateUser(email string, password string) (User, error) {
 	dbStructure, err := db.loadDB()
 	if err != nil {
@@ -157,14 +175,12 @@ func (db *DB) CreateUser(email string, password string) (User, error) {
 	}
 	users := dbStructure.Data.Users.Users
 	id := len(users) + 1
-	if err != nil {
-		return User{}, err
-	}
 
 	user := User{
-		ID:       id,
-		Email:    email,
-		Password: password,
+		ID:          id,
+		Email:       email,
+		Password:    password,
+		IsChirpyRed: false,
 	}
 	for _, u := range users {
 		if u.Email == email {
@@ -196,6 +212,21 @@ func (db *DB) GetUser(email string) (User, error) {
 	return User{}, fmt.Errorf("User not found: %s", email)
 }
 
+func (db *DB) GetUserByID(id int) (User, error) {
+	dbStructure, err := db.loadDB()
+	if err != nil {
+		return User{}, err
+	}
+
+	users := dbStructure.Data.Users.Users
+	for _, user := range users {
+		if user.ID == id {
+			return user, nil
+		}
+	}
+	return User{}, errors.New("User not found")
+}
+
 func (db *DB) UpdateUser(id int, u User) (User, error) {
 	dbStructure, err := db.loadDB()
 	if err != nil {
@@ -206,9 +237,9 @@ func (db *DB) UpdateUser(id int, u User) (User, error) {
 		return User{}, err
 	}
 
-	user.Email = u.Email
-	user.Password = u.Password
-	dbStructure.Data.Users.Users[id] = user
+	// user.Email = u.Email
+	// user.Password = u.Password
+	dbStructure.Data.Users.Users[id] = u
 	err = db.writeDB(dbStructure)
 	if err != nil {
 		return User{}, err
@@ -249,7 +280,7 @@ func (db *DB) VerifyRefreshToken(t string) (User, error) {
 	users := dbStructure.Data.Users.Users
 	for _, u := range users {
 		now := time.Now().Unix()
-		fmt.Printf("Time now: %d\nExpires at: %d\nExpired:%b", now, u.ExpiresAt, now > u.ExpiresAt)
+		fmt.Printf("Time now: %d\nExpires at: %d\nExpired:%v", now, u.ExpiresAt, now > u.ExpiresAt)
 		if u.RefreshToken == t && u.ExpiresAt > time.Now().Unix() {
 			return u, nil
 		}
